@@ -587,7 +587,6 @@ specVersion: 0.0.9
     assert_eq!(Some(9562481), end_block);
 }
 
-
 #[tokio::test]
 async fn parse_event_handlers_with_topics() {
     const YAML: &str = "
@@ -629,7 +628,10 @@ specVersion: 0.0.9
     let topic1 = data_source.as_onchain().unwrap().mapping.event_handlers[0].topic1;
 
     assert_eq!(
-        Some(H256::from_str("0000000000000000000000000000000000000000000000000000000000000000").unwrap()),
+        Some(
+            H256::from_str("0000000000000000000000000000000000000000000000000000000000000000")
+                .unwrap()
+        ),
         topic1
     )
 }
