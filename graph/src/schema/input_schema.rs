@@ -209,6 +209,72 @@ impl TypeInfo {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct TypeInfoList {
+    /// A list of all the object and interface types in the `schema` with
+    /// some important information extracted from the schema. The list is
+    /// sorted by the name atom (not the string name) of the types
+    type_infos: Box<[TypeInfo]>,
+    declared_names: Box<[Atom]>,
+    agg_obj_types: Box<[(Atom, usize)]>,
+}
+
+impl TypeInfoList {
+    fn new(type_infos: Vec<TypeInfo>) -> Self {
+        let mut type_infos: Vec<_> = type_infos.into_iter().collect();
+        type_infos.sort_by_key(|info| info.name());
+        let declared_names: Vec<_> = type_infos.iter().map(|info| info.name()).collect();
+        let mut agg_obj_types: Vec<_> = type_infos
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, info)| match info {
+                TypeInfo::Aggregation(agg_type) => Some(
+                    agg_type
+                        .obj_types
+                        .iter()
+                        .map(move |obj_type| (obj_type.name, pos)),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        agg_obj_types.sort_by_key(|(name, _)| *name);
+        Self {
+            type_infos: type_infos.into_boxed_slice(),
+            declared_names: declared_names.into_boxed_slice(),
+            agg_obj_types: agg_obj_types.into_boxed_slice(),
+        }
+    }
+
+    fn find_by_declared_name(&self, name: Atom) -> Option<&TypeInfo> {
+        self.declared_names
+            .binary_search(&name)
+            .map(|pos| &self.type_infos[pos])
+            .ok()
+    }
+
+    fn find_by_any_name(&self, name: Atom) -> Option<&TypeInfo> {
+        self.find_by_declared_name(name).or_else(|| {
+            self.agg_obj_types
+                .binary_search_by_key(&name, |(name, _)| *name)
+                .map(|pos| &self.type_infos[self.agg_obj_types[pos].1])
+                .ok()
+        })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &TypeInfo> {
+        self.type_infos.iter()
+    }
+}
+
+impl std::ops::Index<usize> for TypeInfoList {
+    type Output = TypeInfo;
+
+    fn index(&self, pos: usize) -> &Self::Output {
+        &self.type_infos[pos]
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub struct Field {
     pub name: Word,
@@ -908,10 +974,6 @@ impl Aggregation {
         intervals
     }
 
-    fn has_object_type(&self, atom: Atom) -> bool {
-        self.obj_types.iter().any(|obj_type| obj_type.name == atom)
-    }
-
     fn aggregated_type(&self, atom: Atom) -> Option<&ObjectType> {
         self.obj_types.iter().find(|obj_type| obj_type.name == atom)
     }
@@ -935,10 +997,7 @@ impl Aggregation {
 #[derive(Debug, PartialEq)]
 pub struct Inner {
     schema: Schema,
-    /// A list of all the object and interface types in the `schema` with
-    /// some important information extracted from the schema. The list is
-    /// sorted by the name atom (not the string name) of the types
-    type_infos: Box<[TypeInfo]>,
+    type_infos: TypeInfoList,
     enum_map: EnumMap,
     pool: Arc<AtomPool>,
     /// A list of all timeseries types by interval
@@ -958,8 +1017,8 @@ impl InputSchema {
     /// representation of the subgraph's GraphQL schema `raw` and its
     /// deployment hash `id`. The returned schema is fully validated.
     pub fn parse(spec_version: &Version, raw: &str, id: DeploymentHash) -> Result<Self, Error> {
-        fn agg_mappings(ts_types: &[TypeInfo]) -> Box<[AggregationMapping]> {
-            let mut mappings: Vec<_> = ts_types
+        fn agg_mappings(type_infos: &TypeInfoList) -> Box<[AggregationMapping]> {
+            let mut mappings: Vec<_> = type_infos
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, ti)| ti.aggregation().map(|agg_type| (idx, agg_type)))
@@ -1019,13 +1078,12 @@ impl InputSchema {
             .into_iter()
             .filter(|obj_type| obj_type.find_directive(kw::AGGREGATION).is_some())
             .map(|agg_type| TypeInfo::for_aggregation(&schema, &pool, agg_type));
-        let mut type_infos: Vec<_> = obj_types
+        let type_infos: Vec<_> = obj_types
             .chain(intf_types)
             .chain(agg_types)
             .chain(vec![TypeInfo::for_poi(&pool)])
             .collect();
-        type_infos.sort_by_key(|ti| ti.name());
-        let type_infos = type_infos.into_boxed_slice();
+        let type_infos = TypeInfoList::new(type_infos);
 
         let enum_map = EnumMap::new(&schema);
 
@@ -1132,24 +1190,11 @@ impl InputSchema {
     /// the name of one of the object types that are part of the
     /// aggregation.
     fn type_info(&self, atom: Atom) -> Result<&TypeInfo, Error> {
-        for ti in self.inner.type_infos.iter() {
-            match ti {
-                TypeInfo::Object(obj_type) => {
-                    if obj_type.name == atom {
-                        return Ok(ti);
-                    }
-                }
-                TypeInfo::Interface(intf_type) => {
-                    if intf_type.name == atom {
-                        return Ok(ti);
-                    }
-                }
-                TypeInfo::Aggregation(agg_type) => {
-                    if agg_type.name == atom || agg_type.has_object_type(atom) {
-                        return Ok(ti);
-                    }
-                }
+        match self.inner.type_infos.find_by_any_name(atom) {
+            Some(ti) => {
+                return Ok(ti);
             }
+            None => { /* error, handled below */ }
         }
 
         let err = match self.inner.pool.get(atom) {
@@ -1479,23 +1524,24 @@ impl InputSchema {
     /// not one of these three kinds, return `None`
     pub fn kind_of_declared_type(&self, name: &str) -> Option<TypeKind> {
         let name = self.inner.pool.lookup(name)?;
-        self.inner.type_infos.iter().find_map(|ti| {
-            if ti.name() == name {
-                Some(ti.kind())
-            } else {
-                None
-            }
-        })
+        self.inner
+            .type_infos
+            .find_by_declared_name(name)
+            .map(|ti| ti.kind())
     }
 
     /// Return `true` if `atom` is an object type, i.e., a type that is
     /// declared with an `@entity` directive in the input schema. This
     /// specifically excludes interfaces and aggregations.
     pub(crate) fn is_object_type(&self, atom: Atom) -> bool {
-        self.inner.type_infos.iter().any(|ti| match ti {
-            TypeInfo::Object(obj_type) => obj_type.name == atom,
-            _ => false,
-        })
+        self.inner
+            .type_infos
+            .find_by_declared_name(atom)
+            .map(|ti| match ti {
+                TypeInfo::Object(_) => true,
+                _ => false,
+            })
+            .unwrap_or(false)
     }
 
     pub(crate) fn typename(&self, atom: Atom) -> &str {
@@ -1531,7 +1577,7 @@ impl InputSchema {
         interval: Option<AggregationInterval>,
     ) -> Option<ObjectOrInterface<'_>> {
         let name = self.inner.pool.lookup(name)?;
-        let ti = self.inner.type_infos.iter().find(|ti| ti.name() == name)?;
+        let ti = self.inner.type_infos.find_by_declared_name(name)?;
         match (ti, interval) {
             (TypeInfo::Object(obj_type), _) => Some(ObjectOrInterface::Object(self, obj_type)),
             (TypeInfo::Interface(intf_type), _) => {
@@ -1553,7 +1599,7 @@ impl InputSchema {
         interval: Option<AggregationInterval>,
     ) -> Option<EntityType> {
         let name = self.inner.pool.lookup(name)?;
-        let ti = self.inner.type_infos.iter().find(|ti| ti.name() == name)?;
+        let ti = self.inner.type_infos.find_by_declared_name(name)?;
         let obj_type = match (ti, interval) {
             (TypeInfo::Object(obj_type), _) => Some(obj_type),
             (TypeInfo::Interface(_), _) => None,
