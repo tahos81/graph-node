@@ -201,6 +201,7 @@ impl<C: Blockchain> HostExports<C> {
     }
 
     /// Ensure that `entity_type` is of the right kind
+    #[allow(dead_code)]
     fn expect_object_type(entity_type: &EntityType, op: &str) -> Result<(), HostExportError> {
         if entity_type.is_object_type() {
             return Ok(());
@@ -226,7 +227,7 @@ impl<C: Blockchain> HostExports<C> {
     ) -> Result<(), HostExportError> {
         let entity_type = state.entity_cache.schema.entity_type(&entity_type)?;
 
-        Self::expect_object_type(&entity_type, "set")?;
+        // Self::expect_object_type(&entity_type, "set")?;
 
         let entity_id = if entity_id == "auto" {
             if self.data_source_causality_region != CausalityRegion::ONCHAIN {
@@ -337,7 +338,7 @@ impl<C: Blockchain> HostExports<C> {
             logger,
         );
         let entity_type = state.entity_cache.schema.entity_type(&entity_type)?;
-        Self::expect_object_type(&entity_type, "remove")?;
+        // Self::expect_object_type(&entity_type, "remove")?;
 
         let key = entity_type.parse_key_in(entity_id, self.data_source_causality_region)?;
         self.check_entity_type_access(&key.entity_type)?;
@@ -361,7 +362,7 @@ impl<C: Blockchain> HostExports<C> {
         scope: GetScope,
     ) -> Result<Option<Cow<'a, Entity>>, anyhow::Error> {
         let entity_type = state.entity_cache.schema.entity_type(&entity_type)?;
-        Self::expect_object_type(&entity_type, "get")?;
+        // Self::expect_object_type(&entity_type, "get")?;
 
         let store_key = entity_type.parse_key_in(entity_id, self.data_source_causality_region)?;
         self.check_entity_type_access(&store_key.entity_type)?;
