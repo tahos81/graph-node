@@ -1163,6 +1163,9 @@ pub struct MappingCallHandler {
 pub struct MappingEventHandler {
     pub event: String,
     pub topic0: Option<H256>,
+    pub topic1: Option<H256>,
+    pub topic2: Option<H256>,
+    pub topic3: Option<H256>,
     pub handler: String,
     #[serde(default)]
     pub receipt: bool,
