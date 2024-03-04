@@ -484,12 +484,44 @@ async fn test_topic_filters(subgraph: Subgraph, ctx: TestContext) -> anyhow::Res
         .await
         .unwrap();
 
+    contract
+        .call(
+            "emitAnotherTrigger",
+            (
+                U256::from(4),
+                U256::from(2),
+                U256::from(3),
+                "abc".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    contract
+        .call(
+            "emitAnotherTrigger",
+            (
+                U256::from(4),
+                U256::from(4),
+                U256::from(3),
+                "abc".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
     let exp = json!({
         "anotherTriggerEntities": [
             {
                 "a": "1",
                 "b": "2",
                 "c": "3",
+                "data": "abc",
+            },
+            {
+                "a": "1",
+                "b": "1",
+                "c": "1",
                 "data": "abc",
             },
         ],
