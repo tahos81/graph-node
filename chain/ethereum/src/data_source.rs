@@ -10,6 +10,8 @@ use graph::prelude::futures03::future::try_join;
 use graph::prelude::futures03::stream::FuturesOrdered;
 use graph::prelude::{Link, SubgraphManifestValidationError};
 use graph::slog::{o, trace};
+use serde::de::Error as ErrorD;
+use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::str::FromStr;
@@ -23,8 +25,8 @@ use graph::{
         ethabi::{Address, Contract, Event, Function, LogParam, ParamType, RawLog},
         serde_json, warn,
         web3::types::{Log, Transaction, H256},
-        BlockNumber, CheapClone, Deserialize, EthereumCall, LightEthereumBlock,
-        LightEthereumBlockExt, LinkResolver, Logger, TryStreamExt,
+        BlockNumber, CheapClone, EthereumCall, LightEthereumBlock, LightEthereumBlockExt,
+        LinkResolver, Logger, TryStreamExt,
     },
 };
 
@@ -1161,12 +1163,42 @@ pub struct MappingCallHandler {
 pub struct MappingEventHandler {
     pub event: String,
     pub topic0: Option<H256>,
+    #[serde(deserialize_with = "deserialize_h256_vec", default)]
     pub topic1: Option<Vec<H256>>,
+    #[serde(deserialize_with = "deserialize_h256_vec", default)]
     pub topic2: Option<Vec<H256>>,
+    #[serde(deserialize_with = "deserialize_h256_vec", default)]
     pub topic3: Option<Vec<H256>>,
     pub handler: String,
     #[serde(default)]
     pub receipt: bool,
+}
+
+// Custom deserializer for H256 fields that removes the '0x' prefix before parsing
+fn deserialize_h256_vec<'de, D>(deserializer: D) -> Result<Option<Vec<H256>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<Vec<String>> = Option::deserialize(deserializer)?;
+
+    match s {
+        Some(vec) => {
+            let mut h256_vec = Vec::new();
+            for hex_str in vec {
+                // Remove '0x' prefix if present
+                let clean_hex_str = hex_str.trim_start_matches("0x");
+                // Ensure the hex string is 64 characters long, after removing '0x'
+                let padded_hex_str = format!("{:0>64}", clean_hex_str);
+                // Parse the padded string into H256, handling potential errors
+                h256_vec.push(
+                    H256::from_str(&padded_hex_str)
+                        .map_err(|e| D::Error::custom(format!("Failed to parse H256: {}", e)))?,
+                );
+            }
+            Ok(Some(h256_vec))
+        }
+        None => Ok(None),
+    }
 }
 
 impl MappingEventHandler {
