@@ -631,6 +631,7 @@ fn convert_to_u32(number: Option<i32>, field: &str, subgraph: &str) -> Result<u3
 
 pub fn state(conn: &PgConnection, id: DeploymentHash) -> Result<DeploymentState, StoreError> {
     use subgraph_deployment as d;
+    use subgraph_error as e;
 
     match d::table
         .filter(d::deployment.eq(id.as_str()))
@@ -641,6 +642,8 @@ pub fn state(conn: &PgConnection, id: DeploymentHash) -> Result<DeploymentState,
             d::latest_ethereum_block_number,
             d::latest_ethereum_block_hash,
             d::earliest_block_number,
+            d::failed,
+            d::health,
         ))
         .first::<(
             String,
@@ -649,6 +652,8 @@ pub fn state(conn: &PgConnection, id: DeploymentHash) -> Result<DeploymentState,
             Option<BigDecimal>,
             Option<Vec<u8>>,
             BlockNumber,
+            bool,
+            SubgraphHealth,
         )>(conn)
         .optional()?
     {
@@ -663,6 +668,8 @@ pub fn state(conn: &PgConnection, id: DeploymentHash) -> Result<DeploymentState,
             latest_block_number,
             latest_block_hash,
             earliest_block_number,
+            failed,
+            health,
         )) => {
             let reorg_count = convert_to_u32(Some(reorg_count), "reorg_count", id.as_str())?;
             let max_reorg_depth =
@@ -681,12 +688,26 @@ pub fn state(conn: &PgConnection, id: DeploymentHash) -> Result<DeploymentState,
                 ))
             })?
             .to_ptr();
+            // We skip checking for errors if the subgraph is healthy; since
+            // that is a lot harder to determine than one would assume, we try
+            // to err on the side of caution
+            let first_error_block = if failed || !matches!(health, SubgraphHealth::Healthy) {
+                e::table
+                    .filter(e::subgraph_id.eq(id.as_str()))
+                    .filter(e::deterministic)
+                    .select(sql::<Integer>("min(lower(block_range))"))
+                    .first::<i32>(conn)
+                    .optional()?
+            } else {
+                None
+            };
             Ok(DeploymentState {
                 id,
                 reorg_count,
                 max_reorg_depth,
                 latest_block,
                 earliest_block_number,
+                first_error_block,
             })
         }
     }
