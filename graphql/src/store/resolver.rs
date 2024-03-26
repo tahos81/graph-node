@@ -39,15 +39,11 @@ pub struct StoreResolver {
 #[derive(Clone, Debug)]
 pub(crate) struct BlockPtrTs {
     pub ptr: BlockPtr,
-    pub timestamp: Option<u64>,
 }
 
 impl From<BlockPtr> for BlockPtrTs {
     fn from(ptr: BlockPtr) -> Self {
-        Self {
-            ptr,
-            timestamp: None,
-        }
+        Self { ptr }
     }
 }
 
@@ -147,20 +143,6 @@ impl StoreResolver {
                 .map_err(|msg| QueryExecutionError::ValueParseError("block.number".to_owned(), msg))
         }
 
-        async fn get_block_ts(
-            store: &dyn QueryStore,
-            ptr: &BlockPtr,
-        ) -> Result<Option<u64>, QueryExecutionError> {
-            match store
-                .block_number_with_timestamp(&ptr.hash)
-                .await
-                .map_err(Into::<QueryExecutionError>::into)?
-            {
-                Some((_, Some(ts))) => Ok(Some(ts)),
-                _ => Ok(None),
-            }
-        }
-
         match bc {
             BlockConstraint::Hash(hash) => {
                 let ptr = store
@@ -175,9 +157,8 @@ impl StoreResolver {
                                     "no block with that hash found".to_owned(),
                                 )
                             })
-                            .map(|(number, ts)| BlockPtrTs {
+                            .map(|(number, _)| BlockPtrTs {
                                 ptr: BlockPtr::new(hash, number),
-                                timestamp: ts,
                             })
                     })?;
 
@@ -206,26 +187,34 @@ impl StoreResolver {
                         ),
                     ));
                 }
-                let timestamp = get_block_ts(store, &state.latest_block).await?;
-
-                Ok(BlockPtrTs { ptr, timestamp })
+                Ok(BlockPtrTs { ptr })
             }
-            BlockConstraint::Latest => {
-                let timestamp = get_block_ts(store, &state.latest_block).await?;
-
-                Ok(BlockPtrTs {
-                    ptr: state.latest_block.cheap_clone(),
-                    timestamp,
-                })
-            }
+            BlockConstraint::Latest => Ok(BlockPtrTs {
+                ptr: state.latest_block.cheap_clone(),
+            }),
         }
     }
 
-    fn lookup_meta(&self) -> Result<r::Value, QueryExecutionError> {
+    async fn lookup_meta(&self) -> Result<r::Value, QueryExecutionError> {
         // Pretend that the whole `_meta` field was loaded by prefetch. Eager
         // loading this is ok until we add more information to this field
         // that would force us to query the database; when that happens, we
         // need to switch to loading on demand
+        let Some(block_ptr) = &self.block_ptr else {
+            return Err(QueryExecutionError::ResolveEntitiesError(
+                "cannot resolve _meta without a block pointer".to_string(),
+            ));
+        };
+        let timestamp = match self
+            .store
+            .block_number_with_timestamp(&block_ptr.ptr.hash)
+            .await
+            .map_err(Into::<QueryExecutionError>::into)?
+        {
+            Some((_, ts)) => ts,
+            _ => None,
+        };
+
         let hash = self
             .block_ptr
             .as_ref()
@@ -247,11 +236,9 @@ impl StoreResolver {
             .map(|ptr| r::Value::Int(ptr.ptr.number.into()))
             .unwrap_or(r::Value::Null);
 
-        let timestamp = self.block_ptr.as_ref().map(|ptr| {
-            ptr.timestamp
-                .map(|ts| r::Value::Int(ts as i64))
-                .unwrap_or(r::Value::Null)
-        });
+        let timestamp = timestamp
+            .map(|ts| r::Value::Int(ts as i64))
+            .unwrap_or(r::Value::Null);
 
         let mut map = BTreeMap::new();
         let block = object! {
@@ -321,7 +308,7 @@ impl Resolver for StoreResolver {
         object_type: ObjectOrInterface<'_>,
     ) -> Result<r::Value, QueryExecutionError> {
         if object_type.is_meta() {
-            return self.lookup_meta();
+            return self.lookup_meta().await;
         }
         if let Some(r::Value::List(children)) = prefetched_object {
             if children.len() > 1 {
