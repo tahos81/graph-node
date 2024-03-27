@@ -1,9 +1,11 @@
 use anyhow::anyhow;
 use diesel::pg::Pg;
+use diesel::serialize::Output;
 use diesel::sql_types::{Bytea, Nullable, Text};
-use diesel::types::FromSql;
+use diesel::types::{FromSql, ToSql};
 use diesel_derives::{AsExpression, FromSqlRow};
 use std::convert::TryFrom;
+use std::io::Write;
 use std::{fmt, str::FromStr};
 use web3::types::{Block, H256};
 
@@ -15,6 +17,7 @@ use crate::{cheap_clone::CheapClone, components::store::BlockNumber};
 
 /// A simple marker for byte arrays that are really block hashes
 #[derive(Clone, Default, PartialEq, Eq, Hash, AsExpression, FromSqlRow)]
+#[sql_type = "diesel::sql_types::Bytea"]
 pub struct BlockHash(pub Box<[u8]>);
 
 impl_stable_hash!(BlockHash(transparent: AsBytes));
@@ -108,6 +111,12 @@ impl FromSql<Bytea, Pg> for BlockHash {
     fn from_sql(bytes: Option<&[u8]>) -> diesel::deserialize::Result<Self> {
         let bytes = <Vec<u8> as FromSql<Bytea, Pg>>::from_sql(bytes)?;
         Ok(BlockHash::from(bytes))
+    }
+}
+
+impl ToSql<Bytea, Pg> for BlockHash {
+    fn to_sql<W: Write>(&self, out: &mut Output<W, Pg>) -> diesel::serialize::Result {
+        ToSql::<Bytea, Pg>::to_sql(self.0.as_ref(), out)
     }
 }
 

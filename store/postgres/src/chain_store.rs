@@ -93,10 +93,12 @@ mod data {
     use graph::prelude::{
         serde_json as json, BlockNumber, BlockPtr, CachedEthereumCall, Error, StoreError,
     };
+    use std::collections::HashMap;
+    use std::convert::TryFrom;
     use std::fmt;
+    use std::io::Write;
     use std::iter::FromIterator;
     use std::str::FromStr;
-    use std::{convert::TryFrom, io::Write};
 
     use crate::transaction_receipt::RawTransactionReceipt;
 
@@ -727,6 +729,47 @@ mod data {
                     Ok(Some((number, crate::chain_store::try_parse_timestamp(ts)?)))
                 }
             }
+        }
+
+        pub(super) fn block_numbers(
+            &self,
+            conn: &PgConnection,
+            hashes: &[BlockHash],
+        ) -> Result<HashMap<BlockHash, BlockNumber>, StoreError> {
+            let pairs = match self {
+                Storage::Shared => {
+                    use public::ethereum_blocks as b;
+
+                    let hashes = hashes
+                        .iter()
+                        .map(|h| format!("{:x}", h))
+                        .collect::<Vec<String>>();
+
+                    b::table
+                        .select((b::hash, b::number))
+                        .filter(b::hash.eq_any(hashes))
+                        .load::<(String, i64)>(conn)?
+                        .into_iter()
+                        .map(|(hash, n)| {
+                            let hash = hex::decode(&hash).expect("Invalid hex in parent_hash");
+                            (BlockHash::from(hash), n)
+                        })
+                        .collect::<Vec<_>>()
+                }
+                Storage::Private(Schema { blocks, .. }) => {
+                    // let hashes: Vec<_> = hashes.into_iter().map(|hash| &hash.0).collect();
+                    blocks
+                        .table()
+                        .select((blocks.hash(), blocks.number()))
+                        .filter(blocks.hash().eq_any(hashes))
+                        .load::<(BlockHash, i64)>(conn)?
+                }
+            };
+
+            let pairs = pairs
+                .into_iter()
+                .map(|(hash, number)| (hash, number as i32));
+            Ok(HashMap::from_iter(pairs))
         }
 
         /// Find the first block that is missing from the database needed to
@@ -2071,6 +2114,24 @@ impl ChainStoreTrait for ChainStore {
                 storage
                     .block_number(conn, &hash)
                     .map(|opt| opt.map(|(number, timestamp)| (chain.clone(), number, timestamp)))
+                    .map_err(|e| e.into())
+            })
+            .await
+    }
+
+    async fn block_numbers(
+        &self,
+        hashes: Vec<BlockHash>,
+    ) -> Result<HashMap<BlockHash, BlockNumber>, StoreError> {
+        if hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let storage = self.storage.clone();
+        self.pool
+            .with_conn(move |conn, _| {
+                storage
+                    .block_numbers(conn, hashes.as_slice())
                     .map_err(|e| e.into())
             })
             .await
