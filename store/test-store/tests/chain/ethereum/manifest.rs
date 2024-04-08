@@ -11,7 +11,7 @@ use graph::data::store::Value;
 use graph::data::subgraph::schema::SubgraphError;
 use graph::data::subgraph::{
     Prune, SPEC_VERSION_0_0_4, SPEC_VERSION_0_0_7, SPEC_VERSION_0_0_8, SPEC_VERSION_0_0_9,
-    SPEC_VERSION_1_0_0,
+    SPEC_VERSION_1_0_0, SPEC_VERSION_1_2_0,
 };
 use graph::data_source::offchain::OffchainDataSourceKind;
 use graph::data_source::DataSourceTemplate;
@@ -583,10 +583,10 @@ dataSources:
 schema:
   file:
     /: /ipfs/Qmschema
-specVersion: 0.0.9
+specVersion: 1.2.0
 ";
 
-    let manifest = resolve_manifest(YAML, SPEC_VERSION_0_0_9).await;
+    let manifest = resolve_manifest(YAML, SPEC_VERSION_1_2_0).await;
     // Check if end block is parsed correctly
     let data_source = manifest.data_sources.first().unwrap();
     let topic1 = &data_source.as_onchain().unwrap().mapping.event_handlers[0].topic1;
