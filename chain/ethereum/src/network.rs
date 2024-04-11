@@ -1,5 +1,7 @@
 use anyhow::{anyhow, bail};
+use graph::blockchain::ChainIdentifier;
 use graph::cheap_clone::CheapClone;
+use graph::components::adapter::{NetIdentifiable, ProviderManager, ProviderName};
 use graph::endpoint::EndpointMetrics;
 use graph::firehose::{AvailableCapacity, SubgraphLimit};
 use graph::prelude::rand::seq::IteratorRandom;
@@ -9,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use graph::impl_slog_value;
-use graph::prelude::Error;
+use graph::prelude::{async_trait, Error};
 
 use crate::adapter::EthereumAdapter as _;
 use crate::capabilities::NodeCapabilities;
@@ -29,6 +31,16 @@ pub struct EthereumNetworkAdapter {
     limit: SubgraphLimit,
 }
 
+#[async_trait]
+impl NetIdentifiable for EthereumNetworkAdapter {
+    async fn net_identifiers(&self) -> Result<ChainIdentifier, anyhow::Error> {
+        unimplemented!()
+    }
+    fn provider_name(&self) -> ProviderName {
+        unimplemented!()
+    }
+}
+
 impl EthereumNetworkAdapter {
     fn is_call_only(&self) -> bool {
         self.adapter.is_call_only()
@@ -46,9 +58,10 @@ impl EthereumNetworkAdapter {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EthereumNetworkAdapters {
-    pub adapters: Vec<EthereumNetworkAdapter>,
+    // provider_status: ProviderGenesisVerification,
+    adapters: Vec<EthereumNetworkAdapter>,
     call_only_adapters: Vec<EthereumNetworkAdapter>,
     // Percentage of request that should be used to retest errored adapters.
     retest_percent: f64,
@@ -66,6 +79,7 @@ impl EthereumNetworkAdapters {
             adapters: vec![],
             call_only_adapters: vec![],
             retest_percent: retest_percent.unwrap_or(DEFAULT_ADAPTER_ERROR_RETEST_PERCENT),
+            // provider_status: ProviderGenesisVerification::default(),
         }
     }
 
@@ -76,7 +90,7 @@ impl EthereumNetworkAdapters {
             self.adapters.push(adapter);
         }
     }
-    pub fn all_cheapest_with(
+    fn all_cheapest_with(
         &self,
         required_capabilities: &NodeCapabilities,
     ) -> impl Iterator<Item = &EthereumNetworkAdapter> + '_ {
@@ -179,7 +193,7 @@ impl EthereumNetworkAdapters {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EthereumNetworks {
     pub metrics: Arc<EndpointMetrics>,
     pub networks: HashMap<String, EthereumNetworkAdapters>,

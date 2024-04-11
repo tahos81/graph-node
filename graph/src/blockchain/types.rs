@@ -316,7 +316,7 @@ impl From<BlockPtr> for BlockNumber {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 /// A collection of attributes that (kind of) uniquely identify a blockchain.
 pub struct ChainIdentifier {
     pub net_version: String,
